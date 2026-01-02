@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>아버 해방계산기 (웹)</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", Arial, sans-serif; }
+    body { margin: 24px; }
+    h1 { margin: 0 0 8px; font-size: 22px; }
+    .muted { color:#666; font-size: 12px; margin-bottom: 14px; }
+    .toolbar { display:flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 16px; }
+    button { padding: 10px 12px; border: 1px solid #ddd; background:#fff; border-radius: 10px; cursor:pointer; }
+    button:hover { background:#f6f6f6; }
+    .note { margin: 10px 0 18px; padding: 12px 14px; border: 1px solid #eee; border-radius: 12px; background:#fafafa; white-space: pre-wrap; }
+    .table-wrap { overflow:auto; border: 1px solid #eee; border-radius: 14px; }
+    table { width: 100%; border-collapse: collapse; min-width: 1020px; }
+    thead th { position: sticky; top: 0; background: #fcfcfc; z-index: 1; }
+    th, td { border-bottom: 1px solid #eee; padding: 10px 10px; text-align: left; }
+    th { font-weight: 700; font-size: 13px; color: #333; }
+    td { font-size: 14px; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    input[type="text"], input[type="number"], select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 8px 10px;
+      border: 1px solid #e5e5e5;
+      border-radius: 10px;
+      font-size: 14px;
+      background: #fff;
+    }
+    input[type="number"] { text-align: right; }
+    .danger { color:#b00020; }
+    tfoot td { background:#fcfcfc; font-weight: 700; }
+    .readonly { background:#f7f7f7; }
+  </style>
+</head>
+<body>
+  <h1>아버 해방계산기 (웹)</h1>
+  <div class="muted">
+    - 비고(보스) 선택 → 수령 자동 입력<br>
+    - 해방(X/아버 n차해방) 선택 → 차감 자동 입력<br>
+    - 다음 행 보유 = 이전 행 합계(엑셀처럼 자동 연쇄)
+  </div>
+
+  <div class="toolbar">
+    <button id="btnAdd">행 추가</button>
+    <button id="btnSave">로컬 저장</button>
+    <button id="btnLoad">로컬 불러오기</button>
+    <button id="btnReset">초기화</button>
+    <button id="btnExport">CSV 내보내기</button>
+  </div>
+
+  <div class="note" id="noteBox"></div>
+
+  <div class="table-wrap">
+    <table id="tbl">
+      <thead>
+        <tr>
+          <th style="width:140px;">일정</th>
+          <th style="width:90px;">주차</th>
+          <th class="num" style="width:110px;">보유</th>
+          <th class="num" style="width:110px;">수령</th>
+          <th class="num" style="width:110px;">차감</th>
+          <th class="num" style="width:110px;">합계</th>
+          <th style="width:220px;">비고(보스)</th>
+          <th style="width:190px;">해방/메모</th>
+          <th style="width:90px;">삭제</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+      <tfoot>
+        <tr>
+          <td colspan="2">총합</td>
+          <td class="num" id="sumHave">0</td>
+          <td class="num" id="sumGet">0</td>
+          <td class="num" id="sumUse">0</td>
+          <td class="num" id="sumTotal">0</td>
+          <td colspan="3"></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+<script>
+  // ✅ 비고(보스) 선택 → 수령 자동 입력 (너 엑셀 XLOOKUP 그대로 매핑)
+  const BOSS_TO_GET = {
+    "루시드(하드)": 100,
+    "윌(하드)": 100,
+    "더스크(카오스)": 100,
+    "가엔슬": 100,
+    "진 힐라(하드)": 200,
+    "세렌(노말)": 300,
+    "칼로스(이지)": 400,
+    "대적자(이지)": 500,
+    "X": 0
+  };
+
+  // ✅ 해방 선택 → 차감 자동 입력 (너 엑셀 XLOOKUP 그대로)
+  const UNLOCK_TO_USE = {
+    "X": 0,
+    "아버 1차해방": -600,
+    "아버 2차해방": -800,
+    "아버 3차해방": -1000,
+    "아버 4차해방": -1500
+  };
+
+  const NOTE_TEXT = "* 아이템버닝 1차 해방 : 600 / 2차해방 : 800 / 3차해방 : 1,000 / 4차해방 : 1,500";
+  document.querySelector("#noteBox").textContent = NOTE_TEXT;
+
+  // ✅ 초기 데이터 (필요하면 너 표대로 수정 가능)
+  let state = [
+    {일정:"1.1~1.7",  주차:"1주차",  보유:0, 수령:0,  차감:0,    합계:0, 비고:"X", 메모:"X"},
+    {일정:"1.8~1.14", 주차:"2주차",  보유:0, 수령:0,  차감:0, 	합계:0,   비고:"X", 메모:"X"},
+    {일정:"1.15~1.21",주차:"3주차",  보유:0,   수령:0,  차감:0,    합계:0, 비고:"X",     메모:"X"},
+    {일정:"1.22~1.28",주차:"4주차",  보유:0, 수령:0,  차감:0,    합계:0, 비고:"X",     메모:"X"},
+    {일정:"1.29~2.4", 주차:"5주차",  보유:0, 수령:0,  차감:0, 	합계:0, 비고:"X",     메모:"X"},
+    {일정:"2.5~2.11", 주차:"6주차",  보유:0, 수령:0,  차감:0,    합계:0, 비고:"X",     메모:"X"},
+    {일정:"2.12~2.18",주차:"7주차",  보유:0, 수령:0,  차감:0,    합계:0, 비고:"X",     메모:"X"},
+    {일정:"2.19~2.25",주차:"8주차",  보유:0, 수령:0,  차감:0,	합계:0, 비고:"X",   메모:"X"},
+    {일정:"2.26~3.4", 주차:"9주차",  보유:0, 수령:0,  차감:0,    합계:0, 비고:"X",   메모:"X"},
+    {일정:"3.5~3.11", 주차:"10주차", 보유:0, 수령:0,  차감:0,    합계:0,비고:"X",   메모:"X"},
+    {일정:"3.12~3.18",주차:"11주차", 보유:0,수령:0,  차감:0,	합계:0,   비고:"X",   메모:"X"},
+    {일정:"3.19~3.25",주차:"12주차", 보유:0,   수령:0,    차감:0,    합계:0,   비고:"X",              메모:"X"},
+    {일정:"3.26~4.1", 주차:"13주차", 보유:0,   수령:0,    차감:0,    합계:0,   비고:"X",              메모:"X"},
+    {일정:"4.2~4.8",  주차:"14주차", 보유:0,   수령:0,    차감:0,    합계:0,   비고:"X",              메모:"X"},
+    {일정:"4.9~4.15", 주차:"15주차", 보유:0,   수령:0,    차감:0,    합계:0,   비고:"X",              메모:"X"},
+  ];
+
+  const $tbody = document.querySelector("#tbl tbody");
+  const $sumHave = document.querySelector("#sumHave");
+  const $sumGet = document.querySelector("#sumGet");
+  const $sumUse = document.querySelector("#sumUse");
+  const $sumTotal = document.querySelector("#sumTotal");
+
+  const BOSS_OPTIONS = ["X", ...Object.keys(BOSS_TO_GET).filter(k => k !== "X")];
+  const UNLOCK_OPTIONS = Object.keys(UNLOCK_TO_USE);
+
+  function fmt(n) { return (Number(n) || 0).toLocaleString("ko-KR"); }
+  function toInt(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.trunc(n) : 0;
+  }
+  function esc(s) {
+    return String(s ?? "")
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#039;");
+  }
+
+  // ✅ 핵심: 드롭다운 값으로 수령/차감 자동 세팅 + 연쇄 보유 계산
+  function recalcAll() {
+    for (let i = 0; i < state.length; i++) {
+      const r = state[i];
+
+      // 1) 비고(보스) → 수령 자동
+      if (r.비고 in BOSS_TO_GET) r.수령 = BOSS_TO_GET[r.비고];
+      else r.수령 = toInt(r.수령);
+
+      // 2) 해방/메모 → 차감 자동
+      if (r.메모 in UNLOCK_TO_USE) r.차감 = UNLOCK_TO_USE[r.메모];
+      else r.차감 = toInt(r.차감);
+
+      // 3) 보유는 "첫 행만 수동", 2행부터는 이전 합계로 자동
+      if (i === 0) r.보유 = toInt(r.보유);
+      else r.보유 = toInt(state[i-1].합계);
+
+      // 4) 합계
+      r.합계 = toInt(r.보유) + toInt(r.수령) + toInt(r.차감);
+    }
+  }
+
+  function renderSelect(options, value, i, key) {
+    const opts = options.map(v => {
+      const sel = (v === value) ? "selected" : "";
+      return `<option value="${esc(v)}" ${sel}>${esc(v)}</option>`;
+    }).join("");
+    return `<select data-i="${i}" data-k="${key}">${opts}</select>`;
+  }
+
+  function render() {
+    recalcAll();
+    $tbody.innerHTML = "";
+
+    state.forEach((r, i) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><input type="text" value="${esc(r.일정)}" data-i="${i}" data-k="일정"></td>
+        <td><input type="text" value="${esc(r.주차)}" data-i="${i}" data-k="주차"></td>
+
+        <!-- 보유: 첫 행만 수정 가능 / 나머지는 자동 -->
+        <td class="num">
+          <input type="number" class="${i===0 ? "" : "readonly"}"
+                 ${i===0 ? "" : "readonly"}
+                 value="${r.보유}" data-i="${i}" data-k="보유">
+        </td>
+
+        <!-- 수령/차감: 드롭다운으로 제어하므로 readonly로 표시 -->
+        <td class="num"><input type="number" class="readonly" readonly value="${r.수령}"></td>
+        <td class="num"><input type="number" class="readonly" readonly value="${r.차감}"></td>
+
+        <td class="num ${r.합계 < 0 ? "danger": ""}">${fmt(r.합계)}</td>
+
+        <td>${renderSelect(BOSS_OPTIONS, r.비고, i, "비고")}</td>
+        <td>${renderSelect(UNLOCK_OPTIONS, r.메모, i, "메모")}</td>
+        <td><button data-del="${i}">삭제</button></td>
+      `;
+      $tbody.appendChild(tr);
+    });
+
+    updateTotals();
+  }
+
+  function updateTotals() {
+    let sHave=0, sGet=0, sUse=0, sTotal=0;
+    state.forEach(r => {
+      sHave += toInt(r.보유);
+      sGet += toInt(r.수령);
+      sUse += toInt(r.차감);
+      sTotal += toInt(r.합계);
+    });
+    $sumHave.textContent = fmt(sHave);
+    $sumGet.textContent = fmt(sGet);
+    $sumUse.textContent = fmt(sUse);
+    $sumTotal.textContent = fmt(sTotal);
+  }
+
+  // 입력(일정/주차/첫행 보유)
+document.addEventListener("input", (e) => {
+  const el = e.target;
+  const i = el?.dataset?.i;
+  const k = el?.dataset?.k;
+  if (i == null || k == null) return;
+  const idx = Number(i);
+
+  if (k === "보유" && idx === 0) {
+    // ✅ 첫 행 보유는 재렌더 없이 값만 갱신
+    state[0].보유 = toInt(el.value);
+
+    // 계산만 다시
+    recalcAll();
+    updateTotals();
+
+    // 합계 셀만 직접 업데이트 (포커스 유지)
+    const row = el.closest("tr");
+    const sumCell = row.querySelector("td:nth-child(6)");
+    sumCell.textContent = fmt(state[0].합계);
+  } else {
+    state[idx][k] = el.value;
+  }
+});
+
+  // 드롭다운 변경(비고/메모)
+  document.addEventListener("change", (e) => {
+    const el = e.target;
+    const i = el?.dataset?.i;
+    const k = el?.dataset?.k;
+    if (i == null || k == null) return;
+    const idx = Number(i);
+    state[idx][k] = el.value;
+    render();
+  });
+
+  // 삭제
+  document.addEventListener("click", (e) => {
+    const del = e.target?.dataset?.del;
+    if (del == null) return;
+    state.splice(Number(del), 1);
+    render();
+  });
+
+  // 행 추가
+  document.querySelector("#btnAdd").addEventListener("click", () => {
+    state.push({일정:"",주차:"",보유:0,수령:0,차감:0,합계:0,비고:"X",메모:"X"});
+    render();
+  });
+
+  // 저장/불러오기/초기화/CSV
+  document.querySelector("#btnSave").addEventListener("click", () => {
+    localStorage.setItem("ab_heabang_table_v1", JSON.stringify(state));
+    alert("저장 완료(이 브라우저)");
+  });
+
+  document.querySelector("#btnLoad").addEventListener("click", () => {
+    const raw = localStorage.getItem("ab_heabang_table_v1");
+    if (!raw) return alert("저장된 데이터가 없어요.");
+    state = JSON.parse(raw);
+    render();
+  });
+
+  document.querySelector("#btnReset").addEventListener("click", () => {
+    location.reload(); // 가장 단순하게
+  });
+
+  document.querySelector("#btnExport").addEventListener("click", () => {
+    recalcAll();
+    const headers = ["일정","주차","보유","수령","차감","합계","비고","메모"];
+    const lines = [headers.join(",")];
+    state.forEach(r => {
+      const row = headers.map(h => `"${String(r[h] ?? "").replaceAll('"','""')}"`);
+      lines.push(row.join(","));
+    });
+    const blob = new Blob([lines.join("\n")], {type:"text/csv;charset=utf-8"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "ab_heabang_table.csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  render();
+</script>
+</body>
+</html>
